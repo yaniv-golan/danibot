@@ -17,42 +17,73 @@ const byte MinutesToLevel3Annoying = 15;
 const byte SecondsBetweenLevel2Annoying = 60;
 const byte SecondsBetweenLevel3Annoying = 30;
 
-// Ranges - from-hour,from-minute, to-hour, to-minute, trigger-hour, trigger-minute
-const byte RANGE_FROM_H = 0;
-const byte RANGE_FROM_M = 1;
-const byte RANGE_TO_H = 2;
-const byte RANGE_TO_M = 3;
-const byte RANGE_TRIGGER_H = 4;
-const byte RANGE_TRIGGER_M = 5;
-const byte morningRange[] = {5, 0, 10, 0, 7, 45};
-const byte noonRange[] = {15, 0, 18, 0, 16, 45};
-const byte eveningRange[] = {19, 0, 22, 0, 19, 45};
+enum DayPart {
+  dpMorning, 
+  dpNoon, 
+  dpEvening
+};
 
-int hourMinToDayMin(uint8_t h, uint8_t m) {
+struct TimeInDay {
+  byte hour;
+  byte minutes;
+};
+
+const TimeInDay tidNULL = {99,99};
+
+bool tidIsNull(TimeInDay& tid) {
+  return ((tid.hour == tidNULL.hour) && (tid.minutes == tidNULL.minutes));
+}
+
+String timeInDayToString(TimeInDay tid) {
+  String s = "";
+  if (tid.hour <= 9)
+    s = "0";
+  s += String(tid.hour);
+  s += ":";
+  if (tid.minutes <= 9)
+     s += "0";
+  s += String(tid.minutes);
+  return s;
+}
+
+struct DogOutRange {
+  TimeInDay from;
+  TimeInDay to;
+  TimeInDay trigger;
+};
+
+void validateRange(struct DogOutRange r) {
+  checkFatalRange(toMinutes(r.from) < toMinutes(r.to));
+  checkFatalRange(toMinutes(r.trigger) > toMinutes(r.from));
+  checkFatalRange(toMinutes(r.trigger) < toMinutes(r.to));
+}
+
+const DogOutRange dogOutRanges[] = {
+  {
+    {5,0},
+    {10,0},
+    {7, 45}
+  },
+  {
+    {15,0},
+    {18,0},
+    {16, 45}
+  },
+  {
+    {19,0},
+    {22,0},
+    {19, 45}
+  }
+};
+
+int toMinutes(TimeInDay tid) {
+  return tid.hour * 60 + tid.minutes;
+}
+
+int daytimeToDayMinutes(uint8_t h, uint8_t m) {
   return h * 60 + m;
 }
 
-const int morningRange_Min[] = {
-  hourMinToDayMin(morningRange[RANGE_FROM_H], morningRange[RANGE_FROM_M]),
-  hourMinToDayMin(morningRange[RANGE_TO_H], morningRange[RANGE_TO_M]),
-  hourMinToDayMin(morningRange[RANGE_TRIGGER_H], morningRange[RANGE_TRIGGER_M]),
-};
-
-const int noonRange_Min[] = {
-  hourMinToDayMin(noonRange[RANGE_FROM_H], noonRange[RANGE_FROM_M]),
-  hourMinToDayMin(noonRange[RANGE_TO_H], noonRange[RANGE_TO_M]),
-  hourMinToDayMin(noonRange[RANGE_TRIGGER_H], noonRange[RANGE_TRIGGER_M]),
-};
-
-const int eveningRange_Min[] = {
-  hourMinToDayMin(eveningRange[RANGE_FROM_H], eveningRange[RANGE_FROM_M]),
-  hourMinToDayMin(eveningRange[RANGE_TO_H], eveningRange[RANGE_TO_M]),
-  hourMinToDayMin(eveningRange[RANGE_TRIGGER_H], eveningRange[RANGE_TRIGGER_M]),
-};
-
-const byte RANGE_FROM = 0;
-const byte RANGE_TO = 1;
-const byte RANGE_TRIGGER = 2;
 
 
 void debugSetup() {
@@ -140,50 +171,65 @@ void checkFatalRange(bool f) {
 }
 
 
-void validateRangeMin(int range[]) {
-  checkFatalRange(range[RANGE_FROM] < range[RANGE_TO]);
-  checkFatalRange(range[RANGE_TRIGGER] > range[RANGE_FROM]);
-  checkFatalRange(range[RANGE_TRIGGER] < range[RANGE_TO]);
-}
-
 void validateRanges() {
-  checkFatalRange(morningRange_Min[RANGE_TO] < noonRange_Min[RANGE_FROM]); // morning.to < noon.from
-  checkFatalRange(noonRange_Min[RANGE_TO] < eveningRange_Min[RANGE_FROM]); // noon.to < evening.from
-  checkFatalRange(eveningRange_Min[RANGE_FROM] > morningRange_Min[RANGE_FROM]); // evening.from > morning.from
-  validateRangeMin(morningRange_Min);
-  validateRangeMin(noonRange_Min);
-  validateRangeMin(eveningRange_Min);
+  checkFatalRange(toMinutes(dogOutRanges[dpMorning].to) < toMinutes(dogOutRanges[dpNoon].from)); // morning.to < noon.from
+  checkFatalRange(toMinutes(dogOutRanges[dpNoon].to) < toMinutes(dogOutRanges[dpEvening].from)); // noon.to < evening.from
+  checkFatalRange(toMinutes(dogOutRanges[dpEvening].from) > toMinutes(dogOutRanges[dpMorning].from)); // evening.from > morning.fro
+  validateRange(dogOutRanges[dpMorning]);
+  validateRange(dogOutRanges[dpNoon]);
+  validateRange(dogOutRanges[dpEvening]);
 }
 
-int currentTimeMin;
 uint8_t lastCheckDate;
-const int TIME_NONE = -1;
-int snoozeTime_Min = TIME_NONE;
-int morningTimeDogOut_Min = TIME_NONE;
-int noonTimeDogOut_Min = TIME_NONE;
-int eveningTimeDogOut_Min = TIME_NONE;
-String mostRecentDogOutTime = "";
+TimeInDay currentTime;
+TimeInDay snoozeTime = tidNULL;
+TimeInDay dogOutTimesDP[] = {
+  tidNULL,
+  tidNULL,
+  tidNULL
+};
+TimeInDay mostRecentDogOutTime = tidNULL;
+
 
 void resetStatus() {
-  snoozeTime_Min = TIME_NONE;
-  morningTimeDogOut_Min = TIME_NONE;
-  noonTimeDogOut_Min = TIME_NONE;
-  eveningTimeDogOut_Min = TIME_NONE;
-  mostRecentDogOutTime = "";
+  snoozeTime = tidNULL;
+  dogOutTimesDP[dpMorning] = tidNULL;
+  dogOutTimesDP[dpNoon] = tidNULL;
+  dogOutTimesDP[dpEvening] = tidNULL;
+  mostRecentDogOutTime = tidNULL;
 }
 
 void beepError() {
   // todo
 }
 
-bool isInRange(int time_Min, int range[]) {
-  return ((time_Min >= range[RANGE_FROM]) && (time_Min <= range[RANGE_TO]));
-}
+bool isInRange(struct TimeInDay t, struct DogOutRange r) {
+  int tm = toMinutes(t);
+  return ((tm >= toMinutes(r.from)) && (tm <= toMinutes(r.to)));
+ } 
+
+
+enum AnnoyingLevel {
+  al1,
+  al2,
+  al3
+};
+
+AnnoyingLevel uiAnnoyingLevel;
+
+enum LedStatus {
+  lsNo, 
+  lsYes,
+  lsFlashing1,
+  lsFlashing2
+};
+
+LedStatus ledStatus[] = {lsNo,lsNo,lsNo};
 
 void updateStatus() {
-  int currentTime_h = rtc.getHours();
-  int currentTime_m = rtc.getMinutes();
-  int currentTime_Min = hourMinToDayMin(rtc.getHours(), rtc.getMinutes());
+  TimeInDay currentTime;
+  currentTime.hour = rtc.getHours();
+  currentTime.minutes = rtc.getMinutes();
 
   uint8_t currentDate = rtc.getDate();
   if (currentDate != lastCheckDate) {
@@ -195,36 +241,37 @@ void updateStatus() {
   if (mainButton.hasBeenClicked()) {
     mainButton.clearEventBits();
     debug("Main button clicked");
-    if (isInRange(currentTime_Min, morningRange_Min)) {
+    if (isInRange(currentTime, dogOutRanges[dpMorning])) {
       debug("morning");
-      morningTimeDogOut_Min = currentTime_Min;
-    } else if (isInRange(currentTime_Min, noonRange_Min)) {
+      dogOutTimesDP[dpMorning] = currentTime;
+    } else if (isInRange(currentTime, dogOutRanges[dpNoon])) {
       debug("noon");
-      noonTimeDogOut_Min = currentTime_Min;
-    } else if (isInRange(currentTime_Min, eveningRange_Min)) {
+      dogOutTimesDP[dpNoon] = currentTime;
+    } else if (isInRange(currentTime, dogOutRanges[dpEvening])) {
       debug("evening");
-      eveningTimeDogOut_Min = currentTime_Min;
+      dogOutTimesDP[dpEvening] = currentTime;
     } else {
       debug("NOT IN ANY RANGE");
     }
     
-    mostRecentDogOutTime = String(currentTime_h) + ":" + String(currentTime_m);
-    
-    // h:m, h:mm -> 0h:m, 0h:mm
-    if (mostRecentDogOutTime.indexOf(":") == 1)
-      mostRecentDogOutTime = "0" + mostRecentDogOutTime;
-    // hh:m -> hh:0m
-    if (mostRecentDogOutTime.length() == 4)
-      mostRecentDogOutTime = mostRecentDogOutTime.substring(0, 3) + "0" + mostRecentDogOutTime.charAt(3);
-      
-    debug("Most recent set to " + mostRecentDogOutTime);
+    mostRecentDogOutTime = currentTime;
   }
 
   if (snoozeButton.hasBeenClicked()) {
     snoozeButton.clearEventBits();
     debug("Snooze button clicked");
-    snoozeTime_Min = currentTime_Min;
+    snoozeTime = currentTime;
   }
+
+  if (tidIsNull(dogOutTimesDP[dpMorning])) {
+    if (isInRange(currentTime, dogOutRanges[dpMorning])) {
+                  
+    }
+  } else {
+    ledStatus[dpMorning] = lsYes;
+  }
+  
+
 }
 
 void setup() {
@@ -243,28 +290,29 @@ void setup() {
 }
 
 
+
 void updateUI() {
   String s;
 
   s = rtc.stringTime();
-  if (mostRecentDogOutTime.length() > 0) {
-    s = s + " " + mostRecentDogOutTime;
+  if (!tidIsNull(mostRecentDogOutTime)) {
+    s = s + " " + timeInDayToString(mostRecentDogOutTime);
   }
 
   lcdOut(0, s);
 
   s = "";
-  if (morningTimeDogOut_Min == TIME_NONE) {
+  if (tidIsNull(dogOutTimesDP[dpMorning])) {
     s = "0";
   } else {
     s = "X";
   }
-  if (noonTimeDogOut_Min == TIME_NONE) {
+  if (tidIsNull(dogOutTimesDP[dpNoon])) {
     s = s + "0";
   } else {
     s = s + "X";
   }
-  if (eveningTimeDogOut_Min == TIME_NONE) {
+  if (tidIsNull(dogOutTimesDP[dpEvening])) {
     s = s + "0";
   } else {
     s = s + "X";
