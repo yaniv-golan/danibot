@@ -21,7 +21,6 @@ QwiicButton snoozeButton;
 SerLCD lcd; // Initialize the library with default I2C address 0x72
 ChainableLED leds(LedsPin1, LedsPin2, LedsCount);
 
-
 // Time to wait before becoming more annoying, counted from the alarm time
 const byte MinutesWaitBeforeReminderLevel2 = 5;
 const byte MinutesWaitBeforeReminderLevel3 = 15;
@@ -84,6 +83,7 @@ DogOutRange dogOutRangesDP[] = {
 
 const Time tidNULL = {99, 99, 99};
 Time currentTime;
+long lastBeepSeconds = 0;
 
 
 bool tidIsNull(Time& tid) {
@@ -115,10 +115,13 @@ void validateRange(struct DogOutRange r) {
   checkFatalRange(toMinutes(r.trigger) < toMinutes(r.to));
 }
 
-
-
 int toMinutes(Time tid) {
   return tid.hour * 60 + tid.minutes;
+}
+
+long toSeconds(Time tid) {
+  long s = (long)toMinutes(tid) * 60 + tid.seconds;
+  return s;
 }
 
 Time toTime(int minutes) {
@@ -184,7 +187,7 @@ void lcdSetup() {
   lcd.setBacklight(255, 255, 255); //Set backlight to bright white
   lcd.setContrast(5); //Set contrast. Lower to 0 for higher contrast.
 
-  lcdOutClear("I am Danibot.");
+  lcdOutClear("I am the Danibot.");
   delay(1000);
 
   lcd.saveSplash(); //Save this current text as the splash screen at next power on
@@ -243,6 +246,7 @@ void resetStatus() {
   dogOutTimesDP[dpNoon] = tidNULL;
   dogOutTimesDP[dpEvening] = tidNULL;
   mostRecentDogOutTime = tidNULL;
+  lastBeepSeconds = 0;
   memcpy(dogOutRangesDP, defaultDogOutRangesDP, sizeof(DogOutRange));
 }
 
@@ -274,7 +278,7 @@ struct ReminderLevelParams {
   byte ledOnMsecs;
   byte ledOffMsecs;
   unsigned int beepFreq;
-  int secondsBetweenBeeps;
+  unsigned int secondsBetweenBeeps;
 };
 
 const ReminderLevelParams reminderLevelParams_RL[] = {
@@ -288,8 +292,6 @@ const ReminderLevelParams reminderLevelParams_RL[] = {
     0, // ledOffColor
     500, // ledOnMsecs
     100, // ledOffMsecs
-    0, // beepFreq
-    0 // secondsBetweenBeeps
   },
   // rl1
   {
@@ -323,12 +325,6 @@ const ReminderLevelParams reminderLevelParams_RL[] = {
   }
 };
 
-/*const int flashIntervalPerReminderLevel[] = {
-  0,
-
-  }*/
-
-
 enum LedStatus {
   lsNo,
   lsYes,
@@ -350,11 +346,11 @@ bool isInRangeUpdateDogOut(Time currentTime, DayPart dp) {
 
 // Update ledStatusDP[dp], and global reminderLevel.
 // Note - before this is called (once for each DayPart), reminderLevel is set to rlNone
-// Upon return, ledStatusDP[dp] will be set to 
+// Upon return, ledStatusDP[dp] will be set to
 //    lsYes if the dog was let out in this period
-//    lsNo if the dog was NOT let out in this period, but the time is before thr trigger time 
+//    lsNo if the dog was NOT let out in this period, but the time is before thr trigger time
 //        (also set reminderLevel to rl1)
-//    lsFlashing is the dog was NOT let out in this period, and we're past the trigger time. In that case, reminderLevel will also be set: 
+//    lsFlashing is the dog was NOT let out in this period, and we're past the trigger time. In that case, reminderLevel will also be set:
 //        (also set reminderLevel to rl2 or rl3, depending on how much time passed since the trigger time)
 void updateUIStatus(Time currentTime, DayPart dp) {
   if (tidIsNull(dogOutTimesDP[dp])) { // was the dog let out in this period?
@@ -367,7 +363,7 @@ void updateUIStatus(Time currentTime, DayPart dp) {
       ledStatusDP[dp] = lsFlashing;
 
       int minutesSinceTrigger = toMinutes(currentTime) - toMinutes(dogOutRangesDP[dp].trigger);
-      
+
       if (minutesSinceTrigger < 0) { // in period, but before trigger time
         reminderLevel = rl0;
       } else {
@@ -487,38 +483,39 @@ float rgb2hue(byte r, byte g, byte b) {
   if (c == 0) {
     hue = 0;
   } else {
-    float segment; 
-    float shift; 
+    float segment;
+    float shift;
     if (maxRGB = r) {
-        segment = (g - b) / c;
-        shift   = 0 / 60;       // R° / (360° / hex sides)
-        if (segment < 0) {          // hue > 180, full rotation
-          shift = 360 / 60;         // R° / (360° / hex sides)
-        }
-        hue = segment + shift;
+      segment = (g - b) / c;
+      shift   = 0 / 60;       // R° / (360° / hex sides)
+      if (segment < 0) {          // hue > 180, full rotation
+        shift = 360 / 60;         // R° / (360° / hex sides)
+      }
+      hue = segment + shift;
     } else if (maxRGB = g) {
-        segment = (b - r) / c;
-        shift   = 120 / 60;     // G° / (360° / hex sides)
-        hue = segment + shift;      
+      segment = (b - r) / c;
+      shift   = 120 / 60;     // G° / (360° / hex sides)
+      hue = segment + shift;
     } else if (maxRGB = b) {
-        segment = (r - g) / c;
-        shift   = 240 / 60;     // B° / (360° / hex sides)
-        hue = segment + shift;
+      segment = (r - g) / c;
+      shift   = 240 / 60;     // B° / (360° / hex sides)
+      hue = segment + shift;
     }
   }
   return hue * 60; // hue is in [0,6], scale it up
 }
 
+// I wired the LEDs in the wrong order, this is easier than rewiring them.
 byte DayPartToLed(DayPart dp) {
   byte led;
   switch (dp) {
-    case dpMorning: 
+    case dpMorning:
       led = 2;
       break;
-    case dpNoon: 
+    case dpNoon:
       led = 1;
       break;
-    case dpEvening: 
+    case dpEvening:
       led = 0;
       break;
   };
@@ -530,7 +527,7 @@ void setDayPartLed(DayPart dp, byte R, byte G, byte B) {
 }
 
 void setDayPartLed(DayPart dp, float hue, float saturation, float brightness) {
-  leds.setColorHSB(DayPartToLed(dp), hue, saturation, brightness);  
+  leds.setColorHSB(DayPartToLed(dp), hue, saturation, brightness);
 }
 
 void setDayPartLed(DayPart dp, byte R, byte G, byte B, float saturation, float brightness) {
@@ -560,17 +557,17 @@ void unpackColor(uint32_t color, byte& r, byte& g, byte& b) {
 
 void setDayPartLed(DayPart dp, uint32_t color) {
   byte r;
-  byte g; 
+  byte g;
   byte b;
-  unpackColor(color, r, g, b); 
+  unpackColor(color, r, g, b);
   setDayPartLed(dp, r, g, b);
 }
 
 void setDayPartLed(DayPart dp, uint32_t color, float saturation, float brightness) {
   byte r;
-  byte g; 
+  byte g;
   byte b;
-  unpackColor(color, r, g, b); 
+  unpackColor(color, r, g, b);
   float hue = rgb2hue(r, g, b);
   setDayPartLed(dp, hue, saturation, brightness);
 }
@@ -586,14 +583,36 @@ void updateLed(DayPart dp) {
     case lsFlashing:
       setDayPartLed(dp, YELLOW);
       break;
-  }  
+  }
 }
 
+
 void beepIfNeeded() {
-  if (reminderLevel = rl0)
+  if (reminderLevel == rlNone)
     return;
 
-  
+  unsigned int beepFreq;
+  unsigned int secondsBetweenBeeps;
+
+  beepFreq = reminderLevelParams_RL[reminderLevel].beepFreq;
+  secondsBetweenBeeps = reminderLevelParams_RL[reminderLevel].secondsBetweenBeeps;
+
+  if (beepFreq == 0)
+    return;
+
+  long currentSeconds = toSeconds(currentTime);
+
+  if (lastBeepSeconds != 0) {
+
+    if (currentSeconds - lastBeepSeconds < secondsBetweenBeeps)
+      return;
+  }
+
+  debug("beeping");
+
+  EasyBuzzer.beep(beepFreq, 3);
+  lastBeepSeconds = currentSeconds;
+
 }
 
 void updateUI() {
