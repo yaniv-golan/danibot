@@ -4,21 +4,22 @@
 #include <SerLCD.h> //http://librarymanager/All#SparkFun_SerLCD
 #include <SparkFun_RV1805.h>
 #include <EasyBuzzer.h>
-#include <Adafruit_NeoPixel.h>
+#include <ChainableLED.h>
 #include "WS2812_Definitions.h"
 
 
 const uint8_t MainButtonDeviceID = 0x10;
 const uint8_t SnoozeButtonDeviceID = 0x20;
 const unsigned int BuzzerPin = 4;
-const unsigned int LedsPin = 6;
+const unsigned int LedsPin1 = 2;
+const unsigned int LedsPin2 = 3;
 const unsigned int LedsCount = 3;
 
 RV1805 rtc;
 QwiicButton mainButton;
 QwiicButton snoozeButton;
 SerLCD lcd; // Initialize the library with default I2C address 0x72
-Adafruit_NeoPixel leds = Adafruit_NeoPixel(LedsCount, LedsPin, NEO_GRB + NEO_KHZ800);
+ChainableLED leds(LedsPin1, LedsPin2, LedsCount);
 
 
 // Time to wait before becoming more annoying, counted from the alarm time
@@ -446,16 +447,14 @@ bool isInSnooze() {
 // call leds.show() to actually turn them off after this.
 void clearLEDs()
 {
-  for (int i = 0; i < LedsCount; i++)
-  {
-    leds.setPixelColor(i, 0);
-  }
+  setDayPartLed(dpMorning, 0);
+  setDayPartLed(dpNoon, 0);
+  setDayPartLed(dpEvening, 0);
 }
 
 void ledsSetup() {
-  leds.begin();
+  //leds.init();
   clearLEDs();
-  leds.show();
 }
 
 
@@ -476,17 +475,116 @@ void setup() {
   debug("setup END");
 }
 
+// Adapted from https://stackoverflow.com/questions/39118528/rgb-to-hsl-conversion
+float rgb2hue(byte r, byte g, byte b) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  byte maxRGB = max(max(r, g), b);
+  byte minRGB = min(min(r, g), b);
+  byte c   = maxRGB - minRGB;
+  float hue;
+  if (c == 0) {
+    hue = 0;
+  } else {
+    float segment; 
+    float shift; 
+    if (maxRGB = r) {
+        segment = (g - b) / c;
+        shift   = 0 / 60;       // R° / (360° / hex sides)
+        if (segment < 0) {          // hue > 180, full rotation
+          shift = 360 / 60;         // R° / (360° / hex sides)
+        }
+        hue = segment + shift;
+    } else if (maxRGB = g) {
+        segment = (b - r) / c;
+        shift   = 120 / 60;     // G° / (360° / hex sides)
+        hue = segment + shift;      
+    } else if (maxRGB = b) {
+        segment = (r - g) / c;
+        shift   = 240 / 60;     // B° / (360° / hex sides)
+        hue = segment + shift;
+    }
+  }
+  return hue * 60; // hue is in [0,6], scale it up
+}
+
+byte DayPartToLed(DayPart dp) {
+  byte led;
+  switch (dp) {
+    case dpMorning: 
+      led = 2;
+      break;
+    case dpNoon: 
+      led = 1;
+      break;
+    case dpEvening: 
+      led = 0;
+      break;
+  };
+  return led;
+};
+
+void setDayPartLed(DayPart dp, byte R, byte G, byte B) {
+  leds.setColorRGB(DayPartToLed(dp), R, G, B);
+}
+
+void setDayPartLed(DayPart dp, float hue, float saturation, float brightness) {
+  leds.setColorHSB(DayPartToLed(dp), hue, saturation, brightness);  
+}
+
+void setDayPartLed(DayPart dp, byte R, byte G, byte B, float saturation, float brightness) {
+  float hue = rgb2hue(R, G, B);
+  setDayPartLed(dp, hue, saturation, brightness);
+}
+
+uint32_t   Color(uint8_t r, uint8_t g, uint8_t b) {
+  return ((uint32_t)r << 16) | ((uint32_t)g <<  8) | b;
+}
+
+uint32_t   Color(uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
+  return ((uint32_t)w << 24) | ((uint32_t)r << 16) | ((uint32_t)g <<  8) | b;
+}
+
+void unpackColor(uint32_t color, byte& r, byte& g, byte &b, byte &w) {
+  w = (color >> 24) & 0xff; // white
+  r = (color >> 16) & 0xff; // red
+  g = (color >> 8) & 0xff; // green
+  b = color  & 0xff; // blue
+}
+
+void unpackColor(uint32_t color, byte& r, byte& g, byte& b) {
+  byte w;
+  unpackColor(color, r, g, b, w);
+}
+
+void setDayPartLed(DayPart dp, uint32_t color) {
+  byte r;
+  byte g; 
+  byte b;
+  unpackColor(color, r, g, b); 
+  setDayPartLed(dp, r, g, b);
+}
+
+void setDayPartLed(DayPart dp, uint32_t color, float saturation, float brightness) {
+  byte r;
+  byte g; 
+  byte b;
+  unpackColor(color, r, g, b); 
+  float hue = rgb2hue(r, g, b);
+  setDayPartLed(dp, hue, saturation, brightness);
+}
 
 void updateLed(DayPart dp) {
   switch (ledStatusDP[dp]) {
     case lsNo:
-      leds.setPixelColor(dp, RED);
+      setDayPartLed(dp, RED);
       break;
     case lsYes:
-      leds.setPixelColor(dp, GREEN);
+      setDayPartLed(dp, GREEN);
       break;
     case lsFlashing:
-      leds.setPixelColor(dp, YELLOW);
+      setDayPartLed(dp, YELLOW);
       break;
   }  
 }
@@ -511,7 +609,6 @@ void updateUI() {
   updateLed(dpMorning);
   updateLed(dpNoon);
   updateLed(dpEvening);
-  leds.show();
 
   s = "";
   if (reminderLevel > rlNone) {
