@@ -3,54 +3,110 @@
 #include <SparkFun_Qwiic_Button.h>
 #include <SerLCD.h> //http://librarymanager/All#SparkFun_SerLCD
 #include <SparkFun_RV1805.h>
+#include <EasyBuzzer.h>
+#include <Adafruit_NeoPixel.h>
+#include "WS2812_Definitions.h"
+
+
+const uint8_t MainButtonDeviceID = 0x10;
+const uint8_t SnoozeButtonDeviceID = 0x20;
+const unsigned int BuzzerPin = 4;
+const unsigned int LedsPin = 6;
+const unsigned int LedsCount = 3;
 
 RV1805 rtc;
 QwiicButton mainButton;
 QwiicButton snoozeButton;
 SerLCD lcd; // Initialize the library with default I2C address 0x72
+Adafruit_NeoPixel leds = Adafruit_NeoPixel(LedsCount, LedsPin, NEO_GRB + NEO_KHZ800);
 
-const byte RTC_ALARM_MODE_ONCE_PER_DAY = 4;
 
 // Time to wait before becoming more annoying, counted from the alarm time
-const byte MinutesToLevel2Annoying = 5;
-const byte MinutesToLevel3Annoying = 15;
-const byte SecondsBetweenLevel2Annoying = 60;
-const byte SecondsBetweenLevel3Annoying = 30;
+const byte MinutesWaitBeforeReminderLevel2 = 5;
+const byte MinutesWaitBeforeReminderLevel3 = 15;
+const byte MinutesToSnooze = 5;
 
 enum DayPart {
-  dpMorning, 
-  dpNoon, 
+  dpMorning,
+  dpNoon,
   dpEvening
 };
 
-struct TimeInDay {
+struct Time {
   byte hour;
   byte minutes;
+  byte seconds;
 };
 
-const TimeInDay tidNULL = {99,99};
+struct DogOutRange {
+  Time from;
+  Time to;
+  Time trigger;
+};
 
-bool tidIsNull(TimeInDay& tid) {
-  return ((tid.hour == tidNULL.hour) && (tid.minutes == tidNULL.minutes));
+const DogOutRange defaultDogOutRangesDP[] = {
+  {
+    {5, 0},
+    {10, 0},
+    {7, 45}
+  },
+  {
+    {15, 0},
+    {18, 0},
+    {16, 45}
+  },
+  {
+    {19, 0},
+    {22, 0},
+    {19, 45}
+  }
+};
+
+DogOutRange dogOutRangesDP[] = {
+  {
+    {5, 0},
+    {10, 0},
+    {7, 45}
+  },
+  {
+    {15, 0},
+    {18, 0},
+    {16, 45}
+  },
+  {
+    {19, 0},
+    {22, 0},
+    {19, 45}
+  }
+};
+
+
+const Time tidNULL = {99, 99, 99};
+Time currentTime;
+
+
+bool tidIsNull(Time& tid) {
+  return ((tid.hour == tidNULL.hour) && (tid.minutes == tidNULL.minutes) && (tid.seconds == tidNULL.seconds));
 }
 
-String timeInDayToString(TimeInDay tid) {
+String timeToString(Time tid, bool withSeconds = false) {
   String s = "";
   if (tid.hour <= 9)
     s = "0";
   s += String(tid.hour);
   s += ":";
   if (tid.minutes <= 9)
-     s += "0";
+    s += "0";
   s += String(tid.minutes);
+  if (withSeconds) {
+    s += ":";
+    if (tid.seconds <= 9)
+      s += "0";
+    s += String(tid.seconds);
+  }
   return s;
 }
 
-struct DogOutRange {
-  TimeInDay from;
-  TimeInDay to;
-  TimeInDay trigger;
-};
 
 void validateRange(struct DogOutRange r) {
   checkFatalRange(toMinutes(r.from) < toMinutes(r.to));
@@ -58,32 +114,19 @@ void validateRange(struct DogOutRange r) {
   checkFatalRange(toMinutes(r.trigger) < toMinutes(r.to));
 }
 
-const DogOutRange dogOutRanges[] = {
-  {
-    {5,0},
-    {10,0},
-    {7, 45}
-  },
-  {
-    {15,0},
-    {18,0},
-    {16, 45}
-  },
-  {
-    {19,0},
-    {22,0},
-    {19, 45}
-  }
-};
 
-int toMinutes(TimeInDay tid) {
+
+int toMinutes(Time tid) {
   return tid.hour * 60 + tid.minutes;
 }
 
-int daytimeToDayMinutes(uint8_t h, uint8_t m) {
-  return h * 60 + m;
+Time toTime(int minutes) {
+  Time t;
+  t.hour = minutes / 60;
+  t.minutes = minutes % 60;
+  t.seconds = 0;
+  return t;
 }
-
 
 
 void debugSetup() {
@@ -124,8 +167,8 @@ void checkFatal(bool f, String msg) {
 
 void buttonsSetup() {
   debug("buttonsSetup BEGIN");
-  checkFatal(mainButton.begin(0x10), "Main button did not acknowledge");
-  checkFatal(snoozeButton.begin(0x20), "Snooze button did not acknowledge");
+  checkFatal(mainButton.begin(MainButtonDeviceID), "Main button did not acknowledge");
+  checkFatal(snoozeButton.begin(SnoozeButtonDeviceID), "Snooze button did not acknowledge");
   mainButton.LEDoff();
   snoozeButton.LEDoff();
   debug("buttonsSetup END");
@@ -170,25 +213,27 @@ void checkFatalRange(bool f) {
   checkFatal(f, "Invalid time range definitions");
 }
 
+void buzzerSetup() {
+  EasyBuzzer.setPin(BuzzerPin);
+}
 
 void validateRanges() {
-  checkFatalRange(toMinutes(dogOutRanges[dpMorning].to) < toMinutes(dogOutRanges[dpNoon].from)); // morning.to < noon.from
-  checkFatalRange(toMinutes(dogOutRanges[dpNoon].to) < toMinutes(dogOutRanges[dpEvening].from)); // noon.to < evening.from
-  checkFatalRange(toMinutes(dogOutRanges[dpEvening].from) > toMinutes(dogOutRanges[dpMorning].from)); // evening.from > morning.fro
-  validateRange(dogOutRanges[dpMorning]);
-  validateRange(dogOutRanges[dpNoon]);
-  validateRange(dogOutRanges[dpEvening]);
+  checkFatalRange(toMinutes(dogOutRangesDP[dpMorning].to) < toMinutes(dogOutRangesDP[dpNoon].from)); // morning.to < noon.from
+  checkFatalRange(toMinutes(dogOutRangesDP[dpNoon].to) < toMinutes(dogOutRangesDP[dpEvening].from)); // noon.to < evening.from
+  checkFatalRange(toMinutes(dogOutRangesDP[dpEvening].from) > toMinutes(dogOutRangesDP[dpMorning].from)); // evening.from > morning.fro
+  validateRange(dogOutRangesDP[dpMorning]);
+  validateRange(dogOutRangesDP[dpNoon]);
+  validateRange(dogOutRangesDP[dpEvening]);
 }
 
 uint8_t lastCheckDate;
-TimeInDay currentTime;
-TimeInDay snoozeTime = tidNULL;
-TimeInDay dogOutTimesDP[] = {
+Time snoozeTime = tidNULL;
+Time dogOutTimesDP[] = {
   tidNULL,
   tidNULL,
   tidNULL
 };
-TimeInDay mostRecentDogOutTime = tidNULL;
+Time mostRecentDogOutTime = tidNULL;
 
 
 void resetStatus() {
@@ -197,40 +242,162 @@ void resetStatus() {
   dogOutTimesDP[dpNoon] = tidNULL;
   dogOutTimesDP[dpEvening] = tidNULL;
   mostRecentDogOutTime = tidNULL;
+  memcpy(dogOutRangesDP, defaultDogOutRangesDP, sizeof(DogOutRange));
 }
 
 void beepError() {
   // todo
 }
 
-bool isInRange(struct TimeInDay t, struct DogOutRange r) {
+bool isInRange(struct Time t, struct DogOutRange r) {
   int tm = toMinutes(t);
   return ((tm >= toMinutes(r.from)) && (tm <= toMinutes(r.to)));
- } 
+}
 
 
-enum AnnoyingLevel {
-  al1,
-  al2,
-  al3
+enum ReminderLevel {
+  rlNone, // nothing to remind
+  rl0,  // In the dog-out period, pre-trigger. led - gentle red pulse, screen - msg, beep - none
+  rl1, // We just passed the trigger time. led - blink red/orange , screen - msg
+  rl2, // led - blink red/orange , screen - msg, beep - 3 beeps every <SecondsBetweenLevel2Annoying>
+  rl3 // // led - blink red/yellow  double speed, screen - msg, beep - 3 beeps every <SecondsBetweenLevel3Annoying>
 };
 
-AnnoyingLevel uiAnnoyingLevel;
+ReminderLevel reminderLevel = rlNone;
+String reminderMessage = "";
+
+struct ReminderLevelParams {
+  bool pulse;
+  uint32_t ledOnColor;
+  uint32_t ledOffColor;
+  byte ledOnMsecs;
+  byte ledOffMsecs;
+  unsigned int beepFreq;
+  int secondsBetweenBeeps;
+};
+
+const ReminderLevelParams reminderLevelParams_RL[] = {
+  // rlNone
+  {
+  },
+  // rl0
+  {
+    true, // pulse
+    RED, // ledOnColor
+    0, // ledOffColor
+    500, // ledOnMsecs
+    100, // ledOffMsecs
+    0, // beepFreq
+    0 // secondsBetweenBeeps
+  },
+  // rl1
+  {
+    false, // pulse
+    RED, // ledOnColor
+    ORANGE, // ledOffColor
+    500, // ledOnMsecs
+    100, // ledOffMsecs
+    0, // beepFreq
+    0 // secondsBetweenBeeps
+  },
+  // rl2
+  {
+    false, // pulse
+    RED, // ledOnColor
+    ORANGE, // ledOffColor
+    500, // ledOnMsecs
+    300, // ledOffMsecs
+    1000, // beepFreq
+    60 // secondsBetweenBeeps
+  },
+  // rl3
+  {
+    false, // pulse
+    RED, // ledOnColor
+    YELLOW, // ledOffColor
+    500, // ledOnMsecs
+    300, // ledOffMsecs
+    1500, // beepFreq
+    30 // secondsBetweenBeeps
+  }
+};
+
+/*const int flashIntervalPerReminderLevel[] = {
+  0,
+
+  }*/
+
 
 enum LedStatus {
-  lsNo, 
+  lsNo,
   lsYes,
-  lsFlashing1,
-  lsFlashing2
+  lsFlashing,
 };
 
-LedStatus ledStatus[] = {lsNo,lsNo,lsNo};
+LedStatus ledStatusDP[] = {lsNo, lsNo, lsNo};
+
+// Called when main button is clicked for each one of the 3 day-parts
+// If currentTime is within the range of the relevant day-part,
+// notes the time, and returns true.
+bool isInRangeUpdateDogOut(Time currentTime, DayPart dp) {
+  if (isInRange(currentTime, dogOutRangesDP[dp])) {
+    dogOutTimesDP[dp] = currentTime;
+    return true;
+  } else
+    return false;
+}
+
+// Update ledStatusDP[dp], and global reminderLevel.
+// Note - before this is called (once for each DayPart), reminderLevel is set to rlNone
+// Upon return, ledStatusDP[dp] will be set to 
+//    lsYes if the dog was let out in this period
+//    lsNo if the dog was NOT let out in this period, but the time is before thr trigger time 
+//        (also set reminderLevel to rl1)
+//    lsFlashing is the dog was NOT let out in this period, and we're past the trigger time. In that case, reminderLevel will also be set: 
+//        (also set reminderLevel to rl2 or rl3, depending on how much time passed since the trigger time)
+void updateUIStatus(Time currentTime, DayPart dp) {
+  if (tidIsNull(dogOutTimesDP[dp])) { // was the dog let out in this period?
+    // NO - dog was not let out
+
+    if (isInRange(currentTime, dogOutRangesDP[dp])) {
+      // dog was NOT let out in thie period, and we're in the range
+
+      reminderMessage = "> " + timeToString(dogOutRangesDP[dp].trigger);
+      ledStatusDP[dp] = lsFlashing;
+
+      int minutesSinceTrigger = toMinutes(currentTime) - toMinutes(dogOutRangesDP[dp].trigger);
+      
+      if (minutesSinceTrigger < 0) { // in period, but before trigger time
+        reminderLevel = rl0;
+      } else {
+        if (minutesSinceTrigger > MinutesWaitBeforeReminderLevel3) {
+          reminderLevel = rl3;
+          reminderMessage += "!!!";
+        } else if (minutesSinceTrigger > MinutesWaitBeforeReminderLevel2) {
+          reminderLevel = rl2;
+          reminderMessage += "!!";
+        } else {
+          reminderLevel = rl1;
+          reminderMessage += "!";
+        }
+      }
+
+    } else {
+      // dog was NOT let out in thie period, but we're not in the range
+      ledStatusDP[dp] = lsNo;
+    }
+  } else {
+    // YES - dog was let out
+    ledStatusDP[dp] = lsYes;
+  }
+}
 
 void updateStatus() {
-  TimeInDay currentTime;
   currentTime.hour = rtc.getHours();
   currentTime.minutes = rtc.getMinutes();
+  currentTime.seconds = rtc.getSeconds();
 
+  // If new day, reset status
   uint8_t currentDate = rtc.getDate();
   if (currentDate != lastCheckDate) {
     debug("Day rollover");
@@ -238,22 +405,20 @@ void updateStatus() {
     lastCheckDate = currentDate;
   }
 
+  // Main button clicked -
   if (mainButton.hasBeenClicked()) {
     mainButton.clearEventBits();
     debug("Main button clicked");
-    if (isInRange(currentTime, dogOutRanges[dpMorning])) {
+    if (isInRangeUpdateDogOut(currentTime, dpMorning)) {
       debug("morning");
-      dogOutTimesDP[dpMorning] = currentTime;
-    } else if (isInRange(currentTime, dogOutRanges[dpNoon])) {
+    } else if (isInRangeUpdateDogOut(currentTime, dpNoon)) {
       debug("noon");
-      dogOutTimesDP[dpNoon] = currentTime;
-    } else if (isInRange(currentTime, dogOutRanges[dpEvening])) {
+    } else if (isInRangeUpdateDogOut(currentTime, dpEvening)) {
       debug("evening");
-      dogOutTimesDP[dpEvening] = currentTime;
     } else {
       debug("NOT IN ANY RANGE");
     }
-    
+
     mostRecentDogOutTime = currentTime;
   }
 
@@ -261,18 +426,38 @@ void updateStatus() {
     snoozeButton.clearEventBits();
     debug("Snooze button clicked");
     snoozeTime = currentTime;
+    EasyBuzzer.stopBeep();
   }
 
-  if (tidIsNull(dogOutTimesDP[dpMorning])) {
-    if (isInRange(currentTime, dogOutRanges[dpMorning])) {
-                  
-    }
-  } else {
-    ledStatus[dpMorning] = lsYes;
-  }
-  
+  reminderLevel = rlNone;
 
+  updateUIStatus(currentTime, dpMorning);
+  updateUIStatus(currentTime, dpNoon);
+  updateUIStatus(currentTime, dpEvening);
 }
+
+bool isInSnooze() {
+  if (tidIsNull(snoozeTime))
+    return false;
+  return (toMinutes(currentTime) - toMinutes(snoozeTime) <= MinutesToSnooze);
+}
+
+// Sets all LEDs to off, but DOES NOT update the display;
+// call leds.show() to actually turn them off after this.
+void clearLEDs()
+{
+  for (int i = 0; i < LedsCount; i++)
+  {
+    leds.setPixelColor(i, 0);
+  }
+}
+
+void ledsSetup() {
+  leds.begin();
+  clearLEDs();
+  leds.show();
+}
+
 
 void setup() {
   debugSetup();
@@ -282,6 +467,8 @@ void setup() {
   buttonsSetup();
   clockSetup();
   validateRanges();
+  buzzerSetup();
+  ledsSetup();
   resetStatus();
   lcdOutClear("All systems OK, good to go.");
   delay(1000);
@@ -290,36 +477,49 @@ void setup() {
 }
 
 
+void updateLed(DayPart dp) {
+  switch (ledStatusDP[dp]) {
+    case lsNo:
+      leds.setPixelColor(dp, RED);
+      break;
+    case lsYes:
+      leds.setPixelColor(dp, GREEN);
+      break;
+    case lsFlashing:
+      leds.setPixelColor(dp, YELLOW);
+      break;
+  }  
+}
+
+void beepIfNeeded() {
+  if (reminderLevel = rl0)
+    return;
+
+  
+}
 
 void updateUI() {
   String s;
 
   s = rtc.stringTime();
   if (!tidIsNull(mostRecentDogOutTime)) {
-    s = s + " " + timeInDayToString(mostRecentDogOutTime);
+    s = s + " " + timeToString(mostRecentDogOutTime);
   }
 
   lcdOut(0, s);
 
-  s = "";
-  if (tidIsNull(dogOutTimesDP[dpMorning])) {
-    s = "0";
-  } else {
-    s = "X";
-  }
-  if (tidIsNull(dogOutTimesDP[dpNoon])) {
-    s = s + "0";
-  } else {
-    s = s + "X";
-  }
-  if (tidIsNull(dogOutTimesDP[dpEvening])) {
-    s = s + "0";
-  } else {
-    s = s + "X";
-  }
+  updateLed(dpMorning);
+  updateLed(dpNoon);
+  updateLed(dpEvening);
+  leds.show();
 
+  s = "";
+  if (reminderLevel > rlNone) {
+    s = reminderMessage;
+  }
   lcdOut(1, s);
 
+  beepIfNeeded();
 }
 
 // Read from serial a time hh:mm, sets the RTC to this time
@@ -344,11 +544,12 @@ void readTimeFromSerial() {
 }
 
 void loop() {
+  EasyBuzzer.update();
   readTimeFromSerial();
   if (!rtc.updateTime())
     error("Failed to retrieve current time");
   updateStatus();
   updateUI();
- 
+
   delay(20); //Don't hammer too hard on the I2C bus.
 }
