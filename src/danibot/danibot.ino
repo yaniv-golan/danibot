@@ -86,27 +86,6 @@ Time currentTime;
 long lastBeepSeconds = 0;
 
 
-bool tidIsNull(Time& tid) {
-  return ((tid.hour == tidNULL.hour) && (tid.minutes == tidNULL.minutes) && (tid.seconds == tidNULL.seconds));
-}
-
-String timeToString(Time tid, bool withSeconds = false) {
-  String s = "";
-  if (tid.hour <= 9)
-    s = "0";
-  s += String(tid.hour);
-  s += ":";
-  if (tid.minutes <= 9)
-    s += "0";
-  s += String(tid.minutes);
-  if (withSeconds) {
-    s += ":";
-    if (tid.seconds <= 9)
-      s += "0";
-    s += String(tid.seconds);
-  }
-  return s;
-}
 
 
 void validateRange(struct DogOutRange r) {
@@ -115,27 +94,11 @@ void validateRange(struct DogOutRange r) {
   checkFatalRange(toMinutes(r.trigger) < toMinutes(r.to));
 }
 
-int toMinutes(Time tid) {
-  return tid.hour * 60 + tid.minutes;
-}
-
-long toSeconds(Time tid) {
-  long s = (long)toMinutes(tid) * 60 + tid.seconds;
-  return s;
-}
-
-Time toTime(int minutes) {
-  Time t;
-  t.hour = minutes / 60;
-  t.minutes = minutes % 60;
-  t.seconds = 0;
-  return t;
-}
 
 
-void debugSetup() {
-  Serial.begin(115200);
-}
+/**************************************************
+ Generic Utility functions 
+**************************************************/
 
 void debug(String msg) {
   Serial.println(msg);
@@ -164,15 +127,127 @@ void fatalError(String msg) {
   while (1); // loop forever
 }
 
-void checkFatal(bool f, String msg) {
+void fatalError(bool f, String msg) {
   if (!f)
     fatalError(msg);
 }
 
+
+/**************************************************
+ Color Utility functions 
+**************************************************/
+
+
+uint32_t   Color(uint8_t r, uint8_t g, uint8_t b) {
+  return ((uint32_t)r << 16) | ((uint32_t)g <<  8) | b;
+}
+
+uint32_t   Color(uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
+  return ((uint32_t)w << 24) | ((uint32_t)r << 16) | ((uint32_t)g <<  8) | b;
+}
+
+void unpackColor(uint32_t color, byte& r, byte& g, byte &b, byte &w) {
+  w = (color >> 24) & 0xff; // white
+  r = (color >> 16) & 0xff; // red
+  g = (color >> 8) & 0xff; // green
+  b = color  & 0xff; // blue
+}
+
+void unpackColor(uint32_t color, byte& r, byte& g, byte& b) {
+  byte w;
+  unpackColor(color, r, g, b, w);
+}
+
+// Adapted from https://stackoverflow.com/questions/39118528/rgb-to-hsl-conversion
+float rgb2hue(byte r, byte g, byte b) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  byte maxRGB = max(max(r, g), b);
+  byte minRGB = min(min(r, g), b);
+  byte c   = maxRGB - minRGB;
+  float hue;
+  if (c == 0) {
+    hue = 0;
+  } else {
+    float segment;
+    float shift;
+    if (maxRGB = r) {
+      segment = (g - b) / c;
+      shift   = 0 / 60;       // R° / (360° / hex sides)
+      if (segment < 0) {          // hue > 180, full rotation
+        shift = 360 / 60;         // R° / (360° / hex sides)
+      }
+      hue = segment + shift;
+    } else if (maxRGB = g) {
+      segment = (b - r) / c;
+      shift   = 120 / 60;     // G° / (360° / hex sides)
+      hue = segment + shift;
+    } else if (maxRGB = b) {
+      segment = (r - g) / c;
+      shift   = 240 / 60;     // B° / (360° / hex sides)
+      hue = segment + shift;
+    }
+  }
+  return hue * 60; // hue is in [0,6], scale it up
+}
+
+/**************************************************
+ Time functions 
+**************************************************/
+
+bool tidIsNull(Time& tid) {
+  return ((tid.hour == tidNULL.hour) && (tid.minutes == tidNULL.minutes) && (tid.seconds == tidNULL.seconds));
+}
+
+String timeToString(Time tid, bool withSeconds = false) {
+  String s = "";
+  if (tid.hour <= 9)
+    s = "0";
+  s += String(tid.hour);
+  s += ":";
+  if (tid.minutes <= 9)
+    s += "0";
+  s += String(tid.minutes);
+  if (withSeconds) {
+    s += ":";
+    if (tid.seconds <= 9)
+      s += "0";
+    s += String(tid.seconds);
+  }
+  return s;
+}
+
+int toMinutes(Time tid) {
+  return tid.hour * 60 + tid.minutes;
+}
+
+long toSeconds(Time tid) {
+  long s = (long)toMinutes(tid) * 60 + tid.seconds;
+  return s;
+}
+
+Time toTime(int minutes) {
+  Time t;
+  t.hour = minutes / 60;
+  t.minutes = minutes % 60;
+  t.seconds = 0;
+  return t;
+}
+
+/**************************************************
+ Setup functions 
+**************************************************/
+ 
+void debugSetup() {
+  Serial.begin(115200);
+}
+
+
 void buttonsSetup() {
   debug("buttonsSetup BEGIN");
-  checkFatal(mainButton.begin(MainButtonDeviceID), "Main button did not acknowledge");
-  checkFatal(snoozeButton.begin(SnoozeButtonDeviceID), "Snooze button did not acknowledge");
+  fatalError(mainButton.begin(MainButtonDeviceID), "Main button did not acknowledge");
+  fatalError(snoozeButton.begin(SnoozeButtonDeviceID), "Snooze button did not acknowledge");
   mainButton.LEDoff();
   snoozeButton.LEDoff();
   debug("buttonsSetup END");
@@ -203,31 +278,39 @@ void I2CSetup() {
 void clockSetup() {
   debug("clockSetup BEGIN");
 
-  checkFatal(rtc.begin(), "Failed to initate clock");
+  fatalError(rtc.begin(), "Failed to initate clock");
 
   //Use the time from the Arduino compiler (build time) to set the RTC
   //Keep in mind that Arduino does not get the new compiler time every time it compiles. to ensure the proper time is loaded, open up a fresh version of the IDE and load the sketch.
-  checkFatal(rtc.setToCompilerTime(), "Failed to set initial time");
+  fatalError(rtc.setToCompilerTime(), "Failed to set initial time");
   rtc.set24Hour();
 
   debug("clockSetup END");
-}
-
-void checkFatalRange(bool f) {
-  checkFatal(f, "Invalid time range definitions");
 }
 
 void buzzerSetup() {
   EasyBuzzer.setPin(BuzzerPin);
 }
 
+void ledsSetup() {
+  //leds.init();
+}
+
+
+
+void checkFatalRange(bool f) {
+  fatalError(f, "Invalid time range definitions");
+}
+
+
 void validateRanges() {
-  checkFatalRange(toMinutes(dogOutRangesDP[dpMorning].to) < toMinutes(dogOutRangesDP[dpNoon].from)); // morning.to < noon.from
-  checkFatalRange(toMinutes(dogOutRangesDP[dpNoon].to) < toMinutes(dogOutRangesDP[dpEvening].from)); // noon.to < evening.from
-  checkFatalRange(toMinutes(dogOutRangesDP[dpEvening].from) > toMinutes(dogOutRangesDP[dpMorning].from)); // evening.from > morning.fro
   validateRange(dogOutRangesDP[dpMorning]);
   validateRange(dogOutRangesDP[dpNoon]);
   validateRange(dogOutRangesDP[dpEvening]);
+  
+  checkFatalRange(toMinutes(dogOutRangesDP[dpMorning].to) < toMinutes(dogOutRangesDP[dpNoon].from)); // morning.to < noon.from
+  checkFatalRange(toMinutes(dogOutRangesDP[dpNoon].to) < toMinutes(dogOutRangesDP[dpEvening].from)); // noon.to < evening.from
+  checkFatalRange(toMinutes(dogOutRangesDP[dpEvening].from) > toMinutes(dogOutRangesDP[dpMorning].from)); // evening.from > morning.fro
 }
 
 uint8_t lastCheckDate;
@@ -248,10 +331,6 @@ void resetStatus() {
   mostRecentDogOutTime = tidNULL;
   lastBeepSeconds = 0;
   memcpy(dogOutRangesDP, defaultDogOutRangesDP, sizeof(DogOutRange));
-}
-
-void beepError() {
-  // todo
 }
 
 bool isInRange(struct Time t, struct DogOutRange r) {
@@ -448,15 +527,11 @@ void clearLEDs()
   setDayPartLed(dpEvening, 0);
 }
 
-void ledsSetup() {
-  //leds.init();
-  clearLEDs();
-}
-
 
 void setup() {
   debugSetup();
   debug("setup BEGIN");
+  
   I2CSetup();
   lcdSetup();
   buttonsSetup();
@@ -464,6 +539,9 @@ void setup() {
   validateRanges();
   buzzerSetup();
   ledsSetup();
+  
+  clearLEDs();
+  
   resetStatus();
   lcdOutClear("All systems OK, good to go.");
   delay(1000);
@@ -471,39 +549,7 @@ void setup() {
   debug("setup END");
 }
 
-// Adapted from https://stackoverflow.com/questions/39118528/rgb-to-hsl-conversion
-float rgb2hue(byte r, byte g, byte b) {
-  r /= 255;
-  g /= 255;
-  b /= 255;
-  byte maxRGB = max(max(r, g), b);
-  byte minRGB = min(min(r, g), b);
-  byte c   = maxRGB - minRGB;
-  float hue;
-  if (c == 0) {
-    hue = 0;
-  } else {
-    float segment;
-    float shift;
-    if (maxRGB = r) {
-      segment = (g - b) / c;
-      shift   = 0 / 60;       // R° / (360° / hex sides)
-      if (segment < 0) {          // hue > 180, full rotation
-        shift = 360 / 60;         // R° / (360° / hex sides)
-      }
-      hue = segment + shift;
-    } else if (maxRGB = g) {
-      segment = (b - r) / c;
-      shift   = 120 / 60;     // G° / (360° / hex sides)
-      hue = segment + shift;
-    } else if (maxRGB = b) {
-      segment = (r - g) / c;
-      shift   = 240 / 60;     // B° / (360° / hex sides)
-      hue = segment + shift;
-    }
-  }
-  return hue * 60; // hue is in [0,6], scale it up
-}
+
 
 // I wired the LEDs in the wrong order, this is easier than rewiring them.
 byte DayPartToLed(DayPart dp) {
@@ -533,26 +579,6 @@ void setDayPartLed(DayPart dp, float hue, float saturation, float brightness) {
 void setDayPartLed(DayPart dp, byte R, byte G, byte B, float saturation, float brightness) {
   float hue = rgb2hue(R, G, B);
   setDayPartLed(dp, hue, saturation, brightness);
-}
-
-uint32_t   Color(uint8_t r, uint8_t g, uint8_t b) {
-  return ((uint32_t)r << 16) | ((uint32_t)g <<  8) | b;
-}
-
-uint32_t   Color(uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
-  return ((uint32_t)w << 24) | ((uint32_t)r << 16) | ((uint32_t)g <<  8) | b;
-}
-
-void unpackColor(uint32_t color, byte& r, byte& g, byte &b, byte &w) {
-  w = (color >> 24) & 0xff; // white
-  r = (color >> 16) & 0xff; // red
-  g = (color >> 8) & 0xff; // green
-  b = color  & 0xff; // blue
-}
-
-void unpackColor(uint32_t color, byte& r, byte& g, byte& b) {
-  byte w;
-  unpackColor(color, r, g, b, w);
 }
 
 void setDayPartLed(DayPart dp, uint32_t color) {
@@ -639,6 +665,8 @@ void updateUI() {
 }
 
 // Read from serial a time hh:mm, sets the RTC to this time
+// This is useful for testing what happens at certain times
+// Time format hh:mm
 void readTimeFromSerial() {
   if (!Serial)
     return;
