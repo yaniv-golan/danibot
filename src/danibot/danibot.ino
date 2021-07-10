@@ -6,6 +6,7 @@
 #include <EasyBuzzer.h>
 #include <ChainableLED.h>
 #include "WS2812_Definitions.h"
+#include "daniutils.h"
 
 
 const uint8_t MainButtonDeviceID = 0x10;
@@ -32,16 +33,11 @@ enum DayPart {
   dpEvening
 };
 
-struct Time {
-  byte hour;
-  byte minutes;
-  byte seconds;
-};
 
 struct DogOutRange {
-  Time from;
-  Time to;
-  Time trigger;
+  TTime from;
+  TTime to;
+  TTime trigger;
 };
 
 const DogOutRange defaultDogOutRangesDP[] = {
@@ -81,8 +77,7 @@ DogOutRange dogOutRangesDP[] = {
 };
 
 
-const Time tidNULL = {99, 99, 99};
-Time currentTime;
+TTime currentTime;
 long lastBeepSeconds = 0;
 
 
@@ -97,7 +92,7 @@ void validateRange(struct DogOutRange r) {
 
 
 /**************************************************
- Generic Utility functions 
+  Generic Utility functions
 **************************************************/
 
 void debug(String msg) {
@@ -134,7 +129,7 @@ void fatalError(bool f, String msg) {
 
 
 /**************************************************
- Color Utility functions 
+  Color Utility functions
 **************************************************/
 
 
@@ -192,53 +187,11 @@ float rgb2hue(byte r, byte g, byte b) {
   return hue * 60; // hue is in [0,6], scale it up
 }
 
-/**************************************************
- Time functions 
-**************************************************/
-
-bool tidIsNull(Time& tid) {
-  return ((tid.hour == tidNULL.hour) && (tid.minutes == tidNULL.minutes) && (tid.seconds == tidNULL.seconds));
-}
-
-String timeToString(Time tid, bool withSeconds = false) {
-  String s = "";
-  if (tid.hour <= 9)
-    s = "0";
-  s += String(tid.hour);
-  s += ":";
-  if (tid.minutes <= 9)
-    s += "0";
-  s += String(tid.minutes);
-  if (withSeconds) {
-    s += ":";
-    if (tid.seconds <= 9)
-      s += "0";
-    s += String(tid.seconds);
-  }
-  return s;
-}
-
-int toMinutes(Time tid) {
-  return tid.hour * 60 + tid.minutes;
-}
-
-long toSeconds(Time tid) {
-  long s = (long)toMinutes(tid) * 60 + tid.seconds;
-  return s;
-}
-
-Time toTime(int minutes) {
-  Time t;
-  t.hour = minutes / 60;
-  t.minutes = minutes % 60;
-  t.seconds = 0;
-  return t;
-}
 
 /**************************************************
- Setup functions 
+  Setup functions
 **************************************************/
- 
+
 void debugSetup() {
   Serial.begin(115200);
 }
@@ -307,7 +260,7 @@ void validateRanges() {
   validateRange(dogOutRangesDP[dpMorning]);
   validateRange(dogOutRangesDP[dpNoon]);
   validateRange(dogOutRangesDP[dpEvening]);
-  
+
   checkFatalRange(toMinutes(dogOutRangesDP[dpMorning].to) < toMinutes(dogOutRangesDP[dpNoon].from)); // morning.to < noon.from
   checkFatalRange(toMinutes(dogOutRangesDP[dpNoon].to) < toMinutes(dogOutRangesDP[dpEvening].from)); // noon.to < evening.from
   checkFatalRange(toMinutes(dogOutRangesDP[dpEvening].from) > toMinutes(dogOutRangesDP[dpMorning].from)); // evening.from > morning.fro
@@ -334,8 +287,8 @@ void resetStatus() {
 }
 
 bool isInRange(struct Time t, struct DogOutRange r) {
-  int tm = toMinutes(t);
-  return ((tm >= toMinutes(r.from)) && (tm <= toMinutes(r.to)));
+  int tm = t.toMinutes();
+  return ((tm >= r.from.toMinutes()) && (tm <= r.to.toMinutes()));
 }
 
 
@@ -441,7 +394,7 @@ void updateUIStatus(Time currentTime, DayPart dp) {
       reminderMessage = "> " + timeToString(dogOutRangesDP[dp].trigger);
       ledStatusDP[dp] = lsFlashing;
 
-      int minutesSinceTrigger = toMinutes(currentTime) - toMinutes(dogOutRangesDP[dp].trigger);
+      int minutesSinceTrigger = currentTime.toMinutes() - dogOutRangesDP[dp].trigger.toMinutes();
 
       if (minutesSinceTrigger < 0) { // in period, but before trigger time
         reminderLevel = rl0;
@@ -515,7 +468,7 @@ void updateStatus() {
 bool isInSnooze() {
   if (tidIsNull(snoozeTime))
     return false;
-  return (toMinutes(currentTime) - toMinutes(snoozeTime) <= MinutesToSnooze);
+  return (currentTime.toMinutes() - snoozeTime.toMinutes() <= MinutesToSnooze);
 }
 
 // Sets all LEDs to off, but DOES NOT update the display;
@@ -531,7 +484,7 @@ void clearLEDs()
 void setup() {
   debugSetup();
   debug("setup BEGIN");
-  
+
   I2CSetup();
   lcdSetup();
   buttonsSetup();
@@ -539,9 +492,9 @@ void setup() {
   validateRanges();
   buzzerSetup();
   ledsSetup();
-  
+
   clearLEDs();
-  
+
   resetStatus();
   lcdOutClear("All systems OK, good to go.");
   delay(1000);
